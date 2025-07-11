@@ -33,7 +33,9 @@ MODEL_ID_CHAT = os.getenv("MODEL_ID_CHAT")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Whisper model
+logger.info("Loading Whisper model...")
 whisper_model = whisper.load_model("base")
+logger.info("Whisper model loaded successfully.")
 
 # AWS Bedrock client
 bedrock = boto3.client(
@@ -42,6 +44,8 @@ bedrock = boto3.client(
     aws_access_key_id=AWS_ACCESS_KEY,
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
 )
+logger.info("Bedrock client initialized.")
+
 
 # Flask app setup
 app = Flask(__name__)
@@ -50,8 +54,8 @@ CORS(app)
 # --- Utilities ---
 def get_db_connection():
     conn = psycopg2.connect(DATABASE_URL)
-    return conn, conn.cursor()
     logger.info("Connected to the database")
+    return conn, conn.cursor()
 
 def split_text(text, max_words=2000):
     words = text.split()
@@ -139,17 +143,37 @@ def extract_text(file):
             }
 
         elif suffix in ['.jpg', '.jpeg', '.png']:
-            image = Image.open(tmp_path)
-            # ocr_text = pytesseract.image_to_string(image)
+            try:
+                # Save image
+                with open(tmp_path, 'rb') as img_file:
+                    image_bytes = bytearray(img_file.read())
 
-            with open(tmp_path, 'rb') as img_file:
-                b64_image = base64.b64encode(img_file.read()).decode("utf-8")
+                # Initialize Textract
+                textract = boto3.client(
+                    'textract',
+                    region_name=BEDROCK_REGION,
+                    aws_access_key_id=AWS_ACCESS_KEY,
+                    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+                )
 
-            return {
-                # "text": ocr_text,
-                "image_base64": b64_image,
-                "filename": filename
-            }
+                # Detect text
+                response = textract.detect_document_text(Document={'Bytes': image_bytes})
+
+                extracted_lines = [
+                    item["Text"] for item in response["Blocks"]
+                    if item["BlockType"] == "LINE"
+                ]
+                textract_text = "\n".join(extracted_lines)
+
+                return {
+                    "text": textract_text,
+                    "filename": filename
+                }
+            except Exception as e:
+                if "UnrecognizedClientException" in str(e) or "security token" in str(e):
+                    logger.error("AWS credentials are invalid or missing for Textract.")
+                logger.error(f"Textract OCR failed: {e}")
+                raise
 
         elif suffix.endswith('.pdf'):
             reader = PyPDF2.PdfReader(tmp_path)
@@ -185,12 +209,17 @@ def extract_text(file):
             }
 
         elif suffix.endswith('.xlsx'):
-            df = pd.read_excel(tmp_path)
-            return {
-                "text": df.to_string(index=False),
-                "image_base64": None,
-                "filename": filename
-            }
+            try:
+                df = pd.read_excel(tmp_path, engine="openpyxl")
+                return {
+                    "text": df.to_string(index=False),
+                    "image_base64": None,
+                    "filename": filename
+                }
+            except Exception as e:
+                logger.error(f"Error reading .xlsx file: {e}")
+                raise
+
 
         else:
             raise ValueError("Unsupported file type")
@@ -203,6 +232,7 @@ def extract_text(file):
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
+    logger.info("File upload endpoint called")
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
 
@@ -213,11 +243,13 @@ def upload_file():
         text = extracted.get("text", "")
         image_base64 = extracted.get("image_base64", None)
         filename = extracted["filename"]
+        logger.info(f"Extracted content from {filename}")
     except Exception as e:
         logger.error(f"Text/Image extraction failed: {e}")
         return jsonify({'error': 'Failed to extract content'}), 500
 
     conn, cursor = get_db_connection()
+    logger.info("Connected to the database for embedding")
     cursor.execute('''CREATE TABLE IF NOT EXISTS embeddings (
         id SERIAL PRIMARY KEY,
         file_name TEXT,
@@ -231,6 +263,7 @@ def upload_file():
     chunk_count = 0
     # --- TEXT CHUNKS ---
     if text:
+        logger.info(f"Embedding text chunks for {filename}")
         for idx, chunk in enumerate(split_text(text)):
             embedding = embed_text_or_image(chunk, content_type='text')
             cursor.execute(
@@ -242,6 +275,7 @@ def upload_file():
     # --- IMAGE EMBEDDING (if any) ---
     if image_base64:
         try:
+            logger.info(f"Embedding image for {filename}")
             embedding = embed_text_or_image(image_base64, content_type='image', model_id="amazon.nova-pro-v1:0")  # Must be multimodal
             cursor.execute(
                 "INSERT INTO embeddings (file_name, chunk_index, embedding, embedding_size, chunk_text) VALUES (%s, %s, %s, %s, %s)",
@@ -255,6 +289,7 @@ def upload_file():
     cursor.close()
     conn.close()
 
+    logger.info(f"Processed {chunk_count} chunks from {filename}")
     return jsonify({'message': f'Processed and embedded {chunk_count} chunks from {filename}.'})
 
 
