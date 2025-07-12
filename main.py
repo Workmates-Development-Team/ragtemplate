@@ -9,12 +9,12 @@ import whisper
 import docx
 import PyPDF2
 import pandas as pd
-import pytesseract
 
 from PIL import Image
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-import moviepy
+from moviepy.editor import AudioFileClip
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -122,8 +122,13 @@ def retrieve_similar_chunks(query_embedding, top_k=3):
 def extract_text(file):
     filename = file.filename.lower()
     suffix = os.path.splitext(filename)[1]
-    tmp_path = os.path.join(tempfile.gettempdir(), filename)
+    # tmp_path = os.path.join(tempfile.gettempdir(), filename)
+    # file.save(tmp_path)
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)  # Close the file descriptor immediately
     file.save(tmp_path)
+    logger.info(f"Saved temp file at: {tmp_path}")
+
 
     try:
         if suffix in ['.mp3', '.wav', '.m4a']:
@@ -132,10 +137,17 @@ def extract_text(file):
                 "image_base64": None,
                 "filename": filename
             }
+        # if os.path.exists(tmp_path):
+        #     os.remove(tmp_path)
+
+        
 
         elif suffix in ['.mp4', '.mov', '.mkv']:
             audio_path = tmp_path + "_audio.wav"
-            AudioFileClip(tmp_path).audio.write_audiofile(audio_path)
+            # AudioFileClip(tmp_path).audio.write_audiofile(audio_path)
+            clip = AudioFileClip(tmp_path)
+            clip.write_audiofile(audio_path)
+            clip.close()
             return {
                 "text": transcribe_audio(audio_path),
                 "image_base64": None,
@@ -186,8 +198,14 @@ def extract_text(file):
 
         elif suffix.endswith('.docx'):
             doc = docx.Document(tmp_path)
+            full_text = []
+            full_text.extend([p.text.strip() for p in doc.paragraphs if p.text.strip()])
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    full_text.append(row_text)
             return {
-                "text": '\n'.join([p.text for p in doc.paragraphs]),
+                "text": '\n'.join(full_text),
                 "image_base64": None,
                 "filename": filename
             }
@@ -225,8 +243,11 @@ def extract_text(file):
             raise ValueError("Unsupported file type")
 
     finally:
-        if os.path.exists(tmp_path):
+        try:
             os.remove(tmp_path)
+            logger.info(f"Cleaned up temp file: {tmp_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete temp file: {e}")
 
 # --- Routes --- 
 

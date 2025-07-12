@@ -6,9 +6,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.39.4",
+    "decorator>=5.2.1",
     "flask>=3.1.1",
     "flask-cors>=6.0.1",
+    "imageio[ffmpeg]>=2.37.0",
+    "imageio-ffmpeg>=0.6.0",
     "moviepy>=2.2.1",
+    "numpy>=2.2.6",
     "openai-whisper>=20250625",
     "opencv-python-headless>=4.12.0.88",
     "openpyxl>=3.1.5",
@@ -18,4 +22,5 @@ dependencies = [
     "pypdf2>=3.0.1",
     "pytesseract>=0.3.13",
     "python-docx>=1.2.0",
+    "tqdm>=4.67.1",
 ]
