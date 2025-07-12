@@ -9,6 +9,9 @@ import whisper
 import docx
 import PyPDF2
 import pandas as pd
+import pytesseract
+import ssl
+import certifi
 
 from PIL import Image
 from flask import Flask, request, jsonify, Response
@@ -47,6 +50,9 @@ bedrock = boto3.client(
 )
 logger.info("Bedrock client initialized.")
 
+ssl._create_default_https_context = ssl._create_unverified_context
+# If you want to use certifi's CA bundle instead, comment the above and use:
+# ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 
 # Flask app setup
 app = Flask(__name__)
@@ -315,6 +321,57 @@ def upload_file():
     return jsonify({'message': f'Processed and embedded {chunk_count} chunks from {filename}.'})
 
 
+# @app.route('/chat', methods=['POST'])
+# def chat():
+#     data = request.get_json()
+#     user_query = data.get('message') or data.get('question')
+#     model_id = data.get('model_id', MODEL_ID_CHAT)
+
+#     if not user_query:
+#         return jsonify({'error': 'Missing question'}), 400
+
+#     try:
+#         query_embedding = embed_text_or_image(user_query, content_type='text')
+#         top_chunks = retrieve_similar_chunks(query_embedding)
+
+#         context = "\n\n".join([chunk_text for _, _, _, chunk_text in top_chunks])
+#         prompt = f"Context:\n{context}\n\nQuestion: {user_query}\nAnswer:"
+
+#         request_body = {
+#             "schemaVersion": "messages-v1",
+#             "messages": [{"role": "user", "content": [{"text": prompt}]}],
+#             "system": [{"text": "You are a helpful assistant. Use the provided context to answer the user's question as accurately as possible. Do not use any external data beyond the provided context."}],
+#             "inferenceConfig": {
+#                 "maxTokens": 512,
+#                 "topP": 0.9,
+#                 "topK": 20,
+#                 "temperature": 0.7
+#             }
+#         }
+
+#         response = bedrock.invoke_model_with_response_stream(
+#             modelId=model_id,
+#             body=json.dumps(request_body)
+#         )
+
+#         def stream_response():
+#             stream = response.get("body")
+#             if stream:
+#                 for event in stream:
+#                     chunk = event.get("chunk")
+#                     if chunk:
+#                         chunk_json = json.loads(chunk.get("bytes").decode())
+#                         delta = chunk_json.get("contentBlockDelta", {}).get("delta", {}).get("text", "")
+#                         yield delta
+#             yield ''
+
+#         return Response(stream_response(), content_type='text/plain')
+
+#     except Exception as e:
+#         logger.error(f"Chat failed: {e}")
+#         return jsonify({'error': 'Chat failed'}), 500
+
+
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
@@ -325,10 +382,17 @@ def chat():
         return jsonify({'error': 'Missing question'}), 400
 
     try:
+        # Embed the user query
         query_embedding = embed_text_or_image(user_query, content_type='text')
+        # Retrieve top-k similar chunks
         top_chunks = retrieve_similar_chunks(query_embedding)
 
+        # Collect context and references
         context = "\n\n".join([chunk_text for _, _, _, chunk_text in top_chunks])
+        # Store references (file_name, chunk_index) for each chunk
+        references = [(file_name, chunk_index) for _, chunk_index, file_name, _ in top_chunks]
+        
+        # Build the prompt with context
         prompt = f"Context:\n{context}\n\nQuestion: {user_query}\nAnswer:"
 
         request_body = {
@@ -343,6 +407,7 @@ def chat():
             }
         }
 
+        # Initialize the Bedrock streaming response
         response = bedrock.invoke_model_with_response_stream(
             modelId=model_id,
             body=json.dumps(request_body)
@@ -350,13 +415,23 @@ def chat():
 
         def stream_response():
             stream = response.get("body")
+            answer = ""
             if stream:
                 for event in stream:
                     chunk = event.get("chunk")
                     if chunk:
                         chunk_json = json.loads(chunk.get("bytes").decode())
                         delta = chunk_json.get("contentBlockDelta", {}).get("delta", {}).get("text", "")
+                        answer += delta
                         yield delta
+
+            # After streaming the answer, append the references
+            if references:
+                yield "\n\n**References:**\n"
+                for idx, (file_name, chunk_index) in enumerate(references, 1):
+                    yield f"{idx}. File: {file_name}, Chunk: {chunk_index}\n"
+            else:
+                yield "\n\n**References:** None\n"
             yield ''
 
         return Response(stream_response(), content_type='text/plain')
