@@ -13,7 +13,8 @@ import pandas as pd
 from PIL import Image
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-from moviepy.editor import AudioFileClip
+# from moviepy.editor import AudioFileClip
+from moviepy import AudioFileClip
 
 from dotenv import load_dotenv
 
