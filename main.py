@@ -303,7 +303,7 @@ def extract_text(file):
  
     finally:
         try:
-            os.remove(save_path)
+            # os.remove(save_path)
             logger.info(f"Cleaned up temp file: {save_path}")
         except Exception as e:
             logger.warning(f"Failed to delete temp file: {e}")
