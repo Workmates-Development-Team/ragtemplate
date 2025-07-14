@@ -12,6 +12,9 @@ import pandas as pd
 import pytesseract
 import ssl
 import certifi
+import subprocess
+
+import threading
  
 from PIL import Image
 from flask import Flask, request, jsonify, Response, send_from_directory
@@ -508,7 +511,34 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
     return send_from_directory(UPLOAD_DIR, filename)
+
+def start_agent():
+
+    # launch the agent in a separate thread/process
+
+    subprocess.Popen(["python", "livekit_agent.py"])
+ 
+@app.route("/voice", methods=["POST"])
+
+def voice_agent():
+
+    """Kick off the console agent (if not already running)."""
+
+    threading.Thread(target=start_agent, daemon=True).start()
+
+    return jsonify({"status": "agent started, check console"}), 202
+
  
 # Run the app
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
+
+
+
+# main.py (add near the bottom)
+
+
+ 
+
+ 
