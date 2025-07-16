@@ -467,6 +467,48 @@ def chat():
         logger.error(f"Chat failed: {e}")
         return jsonify({'error': 'Chat failed'}), 500
 
+@app.route('/delete', methods=['POST'])
+def delete_upload():
+    data = request.get_json()
+    upload_id = data.get('upload_id')
+
+    if not upload_id:
+        return jsonify({'error': 'upload_id is required'}), 400
+
+    try:
+        conn, cursor = get_db_connection()
+
+        # Get associated file paths
+        cursor.execute("SELECT DISTINCT file_path FROM embeddings WHERE upload_id = %s", (upload_id,))
+        file_paths = cursor.fetchall()
+
+        # Delete rows from database
+        cursor.execute("DELETE FROM embeddings WHERE upload_id = %s", (upload_id,))
+        conn.commit()
+
+        # Delete files from filesystem
+        for (file_path,) in file_paths:
+            local_path = os.path.join(".", file_path.lstrip("/"))
+            try:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                    logger.info(f"Deleted file: {local_path}")
+                else:
+                    logger.warning(f"File not found: {local_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete file {local_path}: {e}")
+
+        cursor.close()
+        conn.close()
+
+        logger.info(f"Deleted upload with ID: {upload_id}")
+        return jsonify({'message': f'Deletion completed for upload_id: {upload_id}'})
+
+    except Exception as e:
+        logger.error(f"Deletion failed for upload_id {upload_id}: {e}")
+        return jsonify({'error': 'Deletion failed'}), 500
+
+
 # Directory for uploaded files
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
