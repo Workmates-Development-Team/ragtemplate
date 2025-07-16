@@ -12,6 +12,7 @@ import pandas as pd
 import pytesseract
 import ssl
 import certifi
+import uuid
 from pptx import Presentation
 from PIL import Image
 from flask import Flask, request, jsonify, Response, send_from_directory
@@ -310,13 +311,36 @@ def upload_file():
     conn.commit()
 
     for file in files:
+        upload_id = uuid.uuid4().hex
+        # try:
+        #     extracted = extract_text(file)
+        #     text = extracted.get("text", "")
+        #     image_base64 = extracted.get("image_base64", None)
+        #     filename = extracted["filename"]
+        #     file_path = extracted["file_path"]
+        #     logger.info(f"Extracted content from {filename}")
+        # except Exception as e:
+        #     logger.error(f"Text/Image extraction failed for {file.filename}: {e}")
+        #     results.append({'filename': file.filename, 'error': 'Failed to extract content'})
+        #     continue
+
+        # chunk_count = 0
+        # if text:
+        #     logger.info(f"Embedding text chunks for {filename}")
+        #     for idx, chunk in enumerate(split_text(text)):
+        #         embedding = embed_text_or_image(chunk, content_type='text')
+        #         cursor.execute(
+        #             "INSERT INTO embeddings (file_name, file_path, chunk_index, embedding, embedding_size, chunk_text) VALUES (%s, %s, %s, %s, %s, %s)",
+        #             (filename, file_path, idx + 1, embedding, len(embedding), chunk)
+        #         )
+        #         chunk_count += 1
         try:
             extracted = extract_text(file)
             text = extracted.get("text", "")
             image_base64 = extracted.get("image_base64", None)
             filename = extracted["filename"]
             file_path = extracted["file_path"]
-            logger.info(f"Extracted content from {filename}")
+            logger.info(f"Extracted content from {filename} with upload_id {upload_id}")
         except Exception as e:
             logger.error(f"Text/Image extraction failed for {file.filename}: {e}")
             results.append({'filename': file.filename, 'error': 'Failed to extract content'})
@@ -324,12 +348,11 @@ def upload_file():
 
         chunk_count = 0
         if text:
-            logger.info(f"Embedding text chunks for {filename}")
             for idx, chunk in enumerate(split_text(text)):
                 embedding = embed_text_or_image(chunk, content_type='text')
                 cursor.execute(
-                    "INSERT INTO embeddings (file_name, file_path, chunk_index, embedding, embedding_size, chunk_text) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (filename, file_path, idx + 1, embedding, len(embedding), chunk)
+                    "INSERT INTO embeddings (file_name, file_path, chunk_index, embedding, embedding_size, chunk_text, upload_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (filename, file_path, idx + 1, embedding, len(embedding), chunk, upload_id)
                 )
                 chunk_count += 1
 
@@ -353,7 +376,31 @@ def upload_file():
 
     logger.info(f"Processed files: {', '.join([r['filename'] for r in results])}")
     return jsonify({'message': 'Processed files', 'results': results})
-
+@app.route('/list_files', methods=['GET'])
+def list_files():
+    try:
+        conn, cursor = get_db_connection()
+        cursor.execute("""
+            SELECT file_name, file_path, upload_id, COUNT(*) as chunk_count
+            FROM embeddings
+            GROUP BY file_name, file_path, upload_id
+        """)
+        files = [
+            {
+                "file_name": row[0],
+                "file_path": row[1],
+                "upload_id": row[2],
+                "chunk_count": row[3]
+            }
+            for row in cursor.fetchall()
+        ]
+        cursor.close()
+        conn.close()
+        logger.info(f"Retrieved {len(files)} unique file entries")
+        return jsonify({'files': files})
+    except Exception as e:
+        logger.error(f"Failed to list files: {e}")
+        return jsonify({'error': 'Failed to retrieve files'}), 500
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
